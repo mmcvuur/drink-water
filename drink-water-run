@@ -1,0 +1,76 @@
+#!/usr/bin/env zsh
+
+# --- Settings ---
+voor_message="Yo dude,"
+default_message="Water is life. Stay hydrated!"
+pill_message=" Also, it's time for your fucking pee pill."
+
+beep="$HOME/CODE/drink-water/drink-water-jingle-paris-metro.wav"
+# Set to the path of your .wav file to play after TTS, or leave empty/commented out to disable
+#outro_sound="$HOME/CODE/drink-water/nobodygottime.wav"
+messages_file="$HOME/CODE/drink-water/drink-water-messages"
+
+afplay="/usr/bin/afplay"
+say="/usr/bin/say"
+
+audio_device="USBAudio2.0"
+fallback_device="THX Onyx USB Amplifier"
+
+lockfile="/tmp/drink-water.lock"
+tts_file="/tmp/drink-water-tts.aiff"
+
+# --- Atomic lock ---
+set -o noclobber
+: > "$lockfile" 2>/dev/null || exit 0
+
+cleanup() {
+  rm -f "$lockfile" "$tts_file"
+}
+trap cleanup EXIT
+
+# --- Time check ---
+(( (hour = $(date +%H)) >= 19 || hour < 8 )) && exit 0
+
+# --- Message selection ---
+if [[ -f "$messages_file" ]]; then
+  messages=("${(@f)$(<"$messages_file")}")
+fi
+
+if (( ${#messages[@]:-0} )); then
+  # Zsh arrays are 1-indexed: map 0..len-1 to 1..len
+  message="$voor_message ${messages[RANDOM % ${#messages[@]} + 1]}"
+else
+  message="$voor_message $default_message"
+fi
+
+(( hour == 18 )) && message+="$pill_message"
+
+# --- Audio device switching ---
+if (( $+commands[SwitchAudioSource] )); then
+  current=$(SwitchAudioSource -c 2>/dev/null)
+
+  if [[ $current != "$audio_device" ]]; then
+    SwitchAudioSource -s "$audio_device" >/dev/null 2>&1
+    switched=1
+  else
+    switched=0
+  fi
+else
+  switched=0
+fi
+
+# --- Play notification sound ---
+[[ -f "$beep" ]] && "$afplay" "$beep" >/dev/null 2>&1
+
+# --- Deterministic TTS (no race conditions) ---
+"$say" -o "$tts_file" "$message" && "$afplay" "$tts_file"
+
+# --- Optional post-message sound ---
+[[ -n "$outro_sound" && -f "$outro_sound" ]] && "$afplay" "$outro_sound" >/dev/null 2>&1
+
+# --- Restore device ---
+(( switched )) && (( $+commands[SwitchAudioSource] )) && \
+  SwitchAudioSource -s "$fallback_device" >/dev/null 2>&1
+
+exit 0
+
